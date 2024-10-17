@@ -5,22 +5,90 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace std;
-using filesystem::path;
+namespace fs = std::filesystem;
 
-path operator""_p(const char* data, std::size_t sz) {
-    return path(data, data + sz);
+fs::path operator""_p(const char* data, std::size_t sz) {
+    return fs::path(data, data + sz);
 }
 
-// напишите эту функцию
-bool Preprocess(const path& in_file, const path& out_file, const vector<path>& include_directories);
+void PrintError(const std::string& include_file, const std::string& parent_file, int line_number) {
+    std::cout << "unknown include file " << include_file
+              << " at file " << parent_file << " at line " << line_number << std::endl;
+}
 
+bool ProcessFile(const fs::path& file_path, std::ostream& output, const std::vector<fs::path>& include_directories, const fs::path& current_dir, std::vector<fs::path>& processed_files) {
+    if (std::find(processed_files.begin(), processed_files.end(), fs::canonical(file_path)) != processed_files.end()) {
+        return true;  // File already processed, skip to avoid infinite recursion
+    }
+    processed_files.push_back(fs::canonical(file_path));
+
+    std::ifstream input(file_path);
+    if (!input) {
+        return false;
+    }
+
+    static const std::regex include_regex(R"(\s*#\s*include\s*([<"]([^>"]*)[>"])\s*)");
+
+    std::string line;
+    int line_number = 0;
+    while (std::getline(input, line)) {
+        line_number++;
+        std::smatch match;
+        if (std::regex_match(line, match, include_regex)) {
+            std::string include_file = match[2];
+            bool is_local_include = match[1].str()[0] == '"';
+
+            fs::path include_path;
+            bool found = false;
+
+            if (is_local_include) {
+                include_path = current_dir / include_file;
+                if (fs::exists(include_path)) {
+                    found = true;
+                }
+            }
+
+            if (!found) {
+                for (const auto& dir : include_directories) {
+                    include_path = dir / include_file;
+                    if (fs::exists(include_path)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (found) {
+                if (!ProcessFile(include_path, output, include_directories, include_path.parent_path(), processed_files)) {
+                    return false;
+                }
+            } else {
+                PrintError(include_file, file_path.string(), line_number);
+                return false;
+            }
+        } else {
+            output << line << '\n';
+        }
+    }
+
+    return true;
+}
+
+bool Preprocess(const fs::path& input_path, const fs::path& output_path, const std::vector<fs::path>& include_directories) {
+    std::ofstream output(output_path);
+    if (!output) {
+        return false;
+    }
+
+    std::vector<fs::path> processed_files;
+    return ProcessFile(input_path, output, include_directories, input_path.parent_path(), processed_files);
+}
 string GetFileContents(string file) {
     ifstream stream(file);
-
-    // конструируем string по двум итераторам
     return {(istreambuf_iterator<char>(stream)), istreambuf_iterator<char>()};
 }
 
